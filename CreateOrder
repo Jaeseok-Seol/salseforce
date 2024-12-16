@@ -1,0 +1,62 @@
+trigger CreateOrderOnContractApproval on Contract (after update) {
+    List<Order> ordersToCreate = new List<Order>();
+    List<OrderItem> orderItemsToCreate = new List<OrderItem>();
+
+    for (Contract con : Trigger.new) {
+        if (con.Status == 'Approved' && Trigger.oldMap.get(con.Id).Status != 'Approved') {
+            Order newOrder = new Order();
+            newOrder.AccountId = con.AccountId;
+            newOrder.ContractId = con.Id;
+            newOrder.EffectiveDate = Date.today();
+            newOrder.Status = 'Draft'; // 주문의 초기 상태 설정
+            newOrder.Description = 'Generated from Contract ' + con.Name;
+            newOrder.QuoteReference__c = con.QuoteReference__c;
+            newOrder.Pricebook2Id = con.Pricebook2Id;
+
+            ordersToCreate.add(newOrder);
+        }
+    }
+
+    if (!ordersToCreate.isEmpty()) {
+       
+		insert ordersToCreate;
+
+        // 주문 생성 후, 관련 견적 라인 아이템을 기반으로 주문 제품 생성 
+       	for (Order ord : ordersToCreate) {
+        	Quote relatedQuote = [SELECT Id FROM Quote WHERE Id = :ord.QuoteReference__c LIMIT 1];
+
+            if (relatedQuote != null) {
+                List<QuoteLineItem> quoteLineItems = [SELECT Product2Id, Quantity, UnitPrice, Id FROM QuoteLineItem WHERE QuoteId = :relatedQuote.Id];
+                
+                // Product2Ids 리스트 생성
+                Set<Id> productIds = new Set<Id>();
+                for (QuoteLineItem qli : quoteLineItems) {
+                    productIds.add(qli.Product2Id);
+                }
+                
+                // PricebookEntries 조회
+                Map<Id, PricebookEntry> pricebookEntriesMap = new Map<Id, PricebookEntry>();
+                for(PricebookEntry pbe : [SELECT Id, Product2Id FROM PricebookEntry WHERE Product2Id IN :productIds AND Pricebook2Id = :ord.Pricebook2Id]){
+                    pricebookEntriesMap.put(pbe.Product2Id, pbe);
+                }
+
+                for (QuoteLineItem qli : quoteLineItems) {
+                    if (pricebookEntriesMap.containsKey(qli.Product2Id)) {
+                        OrderItem orderItem = new OrderItem();
+                        orderItem.OrderId = ord.Id;
+                        orderItem.PricebookEntryId = pricebookEntriesMap.get(qli.Product2Id).Id;
+                        orderItem.Quantity = qli.Quantity;
+                        orderItem.UnitPrice = qli.UnitPrice;
+
+                        orderItemsToCreate.add(orderItem);
+                    }
+                }
+            }
+        }
+
+        if (!orderItemsToCreate.isEmpty()) {
+            insert orderItemsToCreate;
+        }
+
+    }
+}
