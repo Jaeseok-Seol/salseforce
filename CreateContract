@@ -1,0 +1,36 @@
+trigger CreateContractOnQuoteApproval on Quote (after update) {
+    List<Contract> contractsToCreate = new List<Contract>();
+    Set<Id> opportunityIds = new Set<Id>();
+    
+    for (Quote q : Trigger.new) {
+        if (q.Status == 'Approved' && Trigger.oldMap.get(q.Id).Status != 'Approved') {
+            opportunityIds.add(q.OpportunityId);
+        }
+    }
+    
+    Map<Id, Opportunity> opportunityMap = new Map<Id, Opportunity>(
+        [SELECT Id, AccountId, Pricebook2Id, Name FROM Opportunity WHERE Id IN :opportunityIds]
+    );
+    
+    for (Quote q : Trigger.new) {
+        if (q.Status == 'Approved' && Trigger.oldMap.get(q.Id).Status != 'Approved') {
+            Opportunity opp = opportunityMap.get(q.OpportunityId);
+            if (opp != null) {
+                Contract newContract = new Contract();
+                newContract.AccountId = opp.AccountId;
+                newContract.Pricebook2Id = opp.Pricebook2Id;
+                newContract.StartDate = Date.today();
+                newContract.Status = 'Draft';
+                newContract.ContractTerm = 12;
+                newContract.Description = 'Generated from Quote ' + q.Name;
+                newContract.Name = opp.Name;
+                newContract.QuoteReference__c = q.Id; // 견적서 ID 참조 추가
+                contractsToCreate.add(newContract);
+            }
+        }
+    }
+    
+    if (!contractsToCreate.isEmpty()) {
+        insert contractsToCreate;
+    }
+}
